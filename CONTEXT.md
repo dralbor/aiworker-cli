@@ -165,6 +165,26 @@ cuando el usuario lo pidió explícitamente, no antes.
       reescribió nada; la historia vieja de "verificacion" sigue ahí,
       inofensiva.
 
+11. **La pantalla de Skills no tenía forma de borrar nada** hasta que el
+    usuario lo pidió (había creado categorías de prueba - `backend`,
+    `frontend`, `helloworld`, ya publicadas de verdad en el repo - y no
+    podía sacarlas). Se agregó navegación con cursor sobre categorías+skills
+    (`skillRows()`/`skillsCursor`, mismo patrón que `mcpRows()` en MCP) y
+    `enter` para confirmar borrado. Una categoría **solo se puede borrar
+    vacía** (si tiene skills adentro, mensaje pidiendo vaciarla primero) -
+    evita un borrado masivo por accidente. El borrado se publica al repo
+    compartido igual que la creación (mismo `publishSkillsChange` en
+    background). Dato importante encontrado con el propio test: borrar una
+    skill dentro de una categoría **no** borra la categoría (queda vacía,
+    visible, borrable aparte) - es el comportamiento correcto, no un bug (el
+    test original asumía lo contrario y estaba mal).
+
+    Al pushear este fix hubo que reconciliar (fetch + merge normal, sin
+    forzar) porque `~/.aiworker-cli/skills-repo` (el clone que usa el
+    mecanismo de sync) ya había pusheado los commits de esas 3 categorías
+    directo al remoto - dos clones independientes del mismo repo,
+    comportamiento esperado, no un error.
+
 ## Estructura del código
 
 ```
