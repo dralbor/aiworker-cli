@@ -5,6 +5,11 @@ Claude localmente, sin que nadie tenga que copiar/pegar JSON a mano ni tokens
 por Slack. Mismo stack que `vulcan-cli`: Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea) +
 [Lip Gloss](https://github.com/charmbracelet/lipgloss), un solo binario.
 
+Código en [github.com/dralbor/aiworker-cli](https://github.com/dralbor/aiworker-cli)
+(repo personal por ahora, ver `CONTEXT.md`). Mismo repo que usa la propia
+herramienta como "marketplace" de skills compartidas — código en la raíz,
+contenido de skills en `/skills` (más abajo).
+
 ## Uso
 
 ```
@@ -165,17 +170,32 @@ La primera vez que entrás a Skills te pregunta, una sola vez, la URL de un
 repo git compartido para el equipo (dejarlo vacío = seguir 100% local). Para
 configurarlo o cambiarlo después - no vuelve a preguntar solo -, `aiworker
 skills set-remote <url>`. Hoy conectado a
-[dralbor/aiworker-cli](https://github.com/dralbor/aiworker-cli) (repo
-personal, placeholder hasta decidir si se mueve a la org - cambiar el
-remoto el día que se mueva es un solo comando, no hace falta re-clonar nada
-a mano). Si lo configurás:
+[dralbor/aiworker-cli](https://github.com/dralbor/aiworker-cli) — **el mismo
+repo que este código fuente** (cuenta personal, placeholder hasta decidir si
+se mueve a la org - cambiar el remoto el día que se mueva es un solo
+comando, no hace falta re-clonar nada a mano).
 
-- **`~/.claude/skills` pasa a SER el working copy de ese repo** — no hay una
-  carpeta de cache aparte que duplique contenido ("sin guardar basura local").
-  Primer uso: si la carpeta está vacía, se clona derecho ahí. Si ya tenía
-  contenido local que no era un repo git, `aiworker-cli` **no adivina cómo
-  mergear** — devuelve un error explicando el comando manual, para no arriesgar
-  pisar skills que ya tenías.
+**El código y las skills conviven en el mismo repo, en carpetas distintas**
+(`/` para el código, `/skills` para el contenido compartido) - decisión
+explícita para no mantener dos repos separados por ahora. Eso significa que
+`~/.claude/skills` **no puede ser directamente** el working copy del repo
+completo (Claude Code solo debe ver skills ahí, no el código Go). La solución:
+
+- El clone real vive en `~/.aiworker-cli/skills-repo` (repo completo: código
+  + `skills/`). `~/.claude/skills` es un **link de directorio** a
+  `~/.aiworker-cli/skills-repo/skills` - junction (`mklink /J`) en Windows,
+  symlink en macOS/Linux. Nada se duplica: escribir en `~/.claude/skills/...`
+  escribe literalmente adentro del repo, de forma transparente.
+- Primer uso: si `~/.aiworker-cli/skills-repo` no existe, se clona el repo
+  entero; si `~/.claude/skills` está vacío o no existe, se crea el link. Si
+  `~/.claude/skills` ya tenía contenido real que no es del repo (no es el
+  link), `aiworker-cli` **no adivina cómo mergear** — devuelve un error
+  explicando qué mover a mano, para no arriesgar pisar skills que ya tenías.
+- Probado en esta máquina: crear una skill a través de `~/.claude/skills`
+  aparece de verdad adentro de `~/.aiworker-cli/skills-repo/skills`, se
+  commitea+pushea desde ahí, y un clone nuevo del repo (simulando un
+  compañero) trae el código Go en la raíz y la skill en `skills/` — sin
+  mezclarse.
 - Cada skill/carpeta que creás se escribe local **al instante** (la lista se
   actualiza ya, sin esperar nada) y dispara en background un
   `git add` + `commit` + `push` con tu identidad de git normal (la que ya

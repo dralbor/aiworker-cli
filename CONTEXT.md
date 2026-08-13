@@ -4,12 +4,14 @@
 en una sesión nueva sin releer todo el chat. `README.md` documenta el
 producto; esto documenta el *por qué* y qué falta.
 
-**Ojo con el nombre repetido**: el proyecto local (`C:\Users\drodriguez\Desktop\aiworker-cli`,
-el código Go) y el repo de GitHub para las skills compartidas
-(`github.com/dralbor/aiworker-cli`) se llaman igual pero son cosas distintas
-— uno es el código fuente de la herramienta, el otro es donde vive el
-contenido (`~/.claude/skills`) que la herramienta sincroniza. No confundir
-al leer logs/URLs.
+**El proyecto local (`C:\Users\drodriguez\Desktop\aiworker-cli`) y el repo de
+GitHub `github.com/dralbor/aiworker-cli` son, a propósito, el mismo
+contenido en dos checkouts distintos**: el código Go vive en la raíz del
+repo, y el mismo repo tiene una carpeta `/skills` que es el contenido
+compartido que la herramienta sincroniza. El checkout de trabajo (donde se
+edita código, este directorio) y el checkout que usa el mecanismo de sync
+(`~/.aiworker-cli/skills-repo`, ver decisión #10) son dos clones
+independientes del mismo remoto - normal, no un error.
 
 ## Qué es
 
@@ -19,9 +21,10 @@ entre el equipo, todo desde una TUI (Go + Bubble Tea + Lip Gloss), mismo
 stack que `vulcan-cli` (repo hermano en `~/Documents/repos/vulcan-cli`, que
 sirvió de referencia de estilo/arquitectura).
 
-Está en `C:\Users\drodriguez\Desktop\aiworker-cli`, todavía **no es un repo
-git** (no se inicializó a pedido explícito — no asumir que hay que hacerlo,
-preguntar primero si hace falta).
+Está en `C:\Users\drodriguez\Desktop\aiworker-cli`, y **ahora sí es un repo
+git**, con remoto en `github.com/dralbor/aiworker-cli` (`main`, pusheado).
+Arrancó sin git a propósito (MVP rápido); se inicializó y pusheó recién
+cuando el usuario lo pidió explícitamente, no antes.
 
 ## Decisiones clave (y por qué)
 
@@ -117,24 +120,50 @@ preguntar primero si hace falta).
    actualizado en el proceso actual (típico en Windows sin abrir terminal
    nueva) con rutas de fallback conocidas.
 
-10. **El repo de skills compartido está conectado y probado con GitHub real**:
-    `github.com/dralbor/aiworker-cli` (cuenta personal del usuario, "capaz a
-    futuro se mueve a grupo-centaurus, por ahora no quería crear el repo en
-    el equipo sin saber si lo van a usar"). Máquina de esta sesión
-    (`drodriguez`) ya está conectada: `~/.claude/skills` es un clone real de
-    ese repo, probado con push+pull reales (no solo contra un bare repo
-    local sintético) y limpiado después (el repo quedó vacío, listo para
-    contenido real). Agregué `aiworker skills set-remote <url>` porque no
-    existía forma de configurar el remoto después del prompt único inicial
-    - hace falta para el día que se mueva a la org. `Prepare()` ahora
-    también **reconcilia el remoto git** si `set-remote` apunta a una URL
-    distinta a la que el repo local ya tenía (`git remote set-url origin`) -
-    probado en vivo: cambia de remoto sin re-clonar. Limitación conocida y
-    documentada, no resuelta: si el nuevo remoto tiene historia no
-    relacionada (ej. un repo de org creado de cero en vez de migrado), el
-    `fetch`+`ff-only merge` va a fallar con error claro en vez de intentar
-    algo raro — asumido que una migración real preserva historia (`git
-    clone --mirror` + push), no un repo nuevo vacío.
+10. **Un solo repo para código + skills, en carpetas separadas** (decisión
+    explícita del usuario, elegida sobre la alternativa de dos repos
+    separados que yo había recomendado por defecto). `github.com/dralbor/aiworker-cli`
+    (cuenta personal, "capaz a futuro se mueve a grupo-centaurus, por ahora
+    no quería crear el repo en el equipo sin saber si lo van a usar") tiene
+    el código Go en la raíz y una carpeta `skills/` con el contenido
+    compartido. Como Claude Code solo debe ver skills en `~/.claude/skills`
+    (nunca el código Go mezclado ahí), la sincronización usa un **link de
+    directorio**, no un clone directo:
+
+    - Clone real (código + `skills/`, completo) en `~/.aiworker-cli/skills-repo`.
+    - `~/.claude/skills` es una **NTFS junction** en Windows (`mklink /J`,
+      no hace falta admin - a diferencia de un symlink real, que sí lo pide)
+      apuntando a `~/.aiworker-cli/skills-repo/skills`. En macOS/Linux es un
+      symlink normal (`os.Symlink`, sin ese problema de permisos).
+      `internal/skillsmarket.ensureLink`/`createDirLink` — usa
+      `os.SameFile` para detectar "ya está bien enlazado" en vez de parsear
+      el tipo de reparse point a mano (mucho más robusto entre versiones de
+      Go/SO).
+    - Probado en vivo, dos veces: (1) contra un repo bare local sintético
+      con contenido "de código" simulado en la raíz, confirmando que
+      escribir a través del link cae adentro de `skills-repo/skills` y que
+      un clone nuevo (compañero simulado) ve el código en la raíz y las
+      skills en `skills/` sin mezclarse; (2) contra el GitHub real, migrando
+      esta máquina de la estructura vieja (clon completo directo en
+      `~/.claude/skills`, de antes de esta decisión) a la nueva - confirmado
+      con `fsutil reparsepoint query` que es una junction real.
+    - Agregué `aiworker skills set-remote <url>` porque no existía forma de
+      configurar el remoto después del prompt único inicial - hace falta
+      para el día que se mueva a la org. `Prepare()` también **reconcilia
+      el remoto git** si `set-remote` apunta a una URL distinta a la que el
+      repo local ya tenía (`git remote set-url origin`) - probado en vivo,
+      cambia de remoto sin re-clonar. Limitación conocida, no resuelta: si
+      el nuevo remoto tiene historia no relacionada (ej. un repo de org
+      creado de cero en vez de migrado), el `fetch`+`ff-only merge` va a
+      fallar con error claro en vez de intentar algo raro — asumido que una
+      migración real preserva historia (`git clone --mirror` + push), no un
+      repo nuevo vacío.
+    - El primer push del código a este repo tuvo que reconciliar con 2
+      commits previos de verificación (de cuando este mismo repo se probó
+      *solo* como store de skills, antes de esta decisión) vía `git merge
+      --allow-unrelated-histories` — nunca se hizo `push --force` ni se
+      reescribió nada; la historia vieja de "verificacion" sigue ahí,
+      inofensiva.
 
 ## Estructura del código
 
@@ -149,7 +178,7 @@ internal/
   prereq/          chequeo + auto-instalación de runtimes (npx, uvx)
   doctor/          chequeo de entorno general (git, claude, + lo que prereq requiera)
   skills/          filesystem puro: crear/listar skills y categorías
-  skillsmarket/    skills + git compartido (bootstrap, reconcile de remoto, sync sin cooldown, publish en background)
+  skillsmarket/    skills + git compartido (bootstrap con link de directorio, reconcile de remoto, sync sin cooldown, publish en background)
   gitrepo/         wrapper genérico de git (nunca fuerza push, nunca pisa historia)
   tui/app/         toda la TUI (un solo Model grande, Bubble Tea)
   styles/          paleta y helpers de Lip Gloss
@@ -165,11 +194,16 @@ pull reales contra GitHub (`dralbor/aiworker-cli`), no solo un bare repo
 local sintético. Build limpio, `go vet` limpio, tests unitarios (`go test
 ./...`) pasando. Última build: `aiworker.exe` en la raíz del proyecto.
 
-Estado real de esta máquina ahora mismo: `~/.claude/skills` conectado y
-vacío (listo para que alguien cree la primera skill de verdad),
-`~/.aiworker-cli/state.json` tiene `atlassian` instalado en Claude Desktop
-(lo hizo el usuario probando el binario entre sesiones, con secretos reales
-en el llavero de Windows - no tocar/asumir que es descartable).
+Estado real de esta máquina ahora mismo:
+- `~/.claude/skills` → junction → `~/.aiworker-cli/skills-repo/skills`,
+  vacío de skills reales (listo para que alguien cree la primera).
+- `~/.aiworker-cli/skills-repo` es un clone completo de
+  `dralbor/aiworker-cli` (código + skills/), conectado y sincronizado.
+- El proyecto en `Desktop\aiworker-cli` es un repo git aparte (mismo
+  remoto), rama `main`, working tree limpio, pusheado.
+- `~/.aiworker-cli/state.json` tiene `atlassian` instalado en Claude Desktop
+  (lo hizo el usuario probando el binario entre sesiones, con secretos
+  reales en el llavero de Windows - no tocar/asumir que es descartable).
 
 ## Pendiente / próximos pasos posibles
 
@@ -184,7 +218,9 @@ en el llavero de Windows - no tocar/asumir que es descartable).
   directo a la rama por defecto (pedido explícito), rama+PR quedó anotado
   como alternativa si el equipo cambia de opinión.
 - **CI de release** igual a `vulcan-cli` (`.github/workflows/release.yaml`) —
-  no existe todavía, el proyecto no es ni siquiera un repo git aún.
+  no existe todavía. El repo ya existe y tiene el código, pero no hay
+  workflow de build/release configurado (el usuario sube el `.exe` a mano a
+  Releases, como hace con vulcan-cli).
 - Si se agregan más entradas HTTP/OAuth al catálogo, revisar si vale la pena
   soportarlas también en Claude Desktop (hoy `Apply` rechaza esa combinación
   explícitamente en vez de adivinar el schema).
@@ -193,11 +229,17 @@ en el llavero de Windows - no tocar/asumir que es descartable).
 
 ```
 cd C:\Users\drodriguez\Desktop\aiworker-cli
+git status                                                 # ahora SI es un repo, chequear antes de tocar nada
 "C:\Program Files\Go\bin\go.exe" build -o aiworker.exe .   # o agregar Go al PATH de la sesión
 "C:\Program Files\Go\bin\go.exe" test ./...
 .\aiworker.exe            # TUI completa
 .\aiworker.exe doctor     # chequeo no interactivo
 ```
+
+Cambios de código nuevos van como commits normales sobre `main` (remoto
+`origin` ya configurado) - no hay rama de release ni CI todavía, así que un
+`git push` a `main` es directo. Recordar la regla del usuario: nunca
+"Co-Authored-By" en los mensajes de commit.
 
 Go se instaló en esta sesión (`C:\Program Files\Go`) porque no estaba en la
 máquina; si una sesión nueva no lo encuentra en PATH, es la misma causa que
