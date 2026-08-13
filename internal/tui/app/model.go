@@ -7,6 +7,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ const (
 	screenMCPForm
 	screenSkillsRemotePrompt
 	screenSkills
+	screenSkillsConfirmDelete
 	screenSkillsNewCategory
 	screenSkillsNewName
 	screenSkillsNewFolder
@@ -105,6 +107,7 @@ type Model struct {
 	// Skills screen / marketplace
 	skillsRoot        string
 	skillsCats        []skills.Category
+	skillsCursor      int
 	skillsGitBacked   bool
 	skillsSyncing     bool
 	skillsSyncErr     error
@@ -113,6 +116,11 @@ type Model struct {
 	nameInput         textinput.Model
 	folderInput       textinput.Model
 	remotePromptInput textinput.Model
+
+	// Skills delete flow
+	skillsDeleteTarget     string
+	skillsDeleteLabel      string
+	skillsDeleteIsCategory bool
 
 	// Doctor screen
 	doctorChecks []doctor.Check
@@ -315,6 +323,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.confirmRemove()
 		case screenMCPNeedsInstall:
 			return m, m.startToolInstall()
+		case screenSkillsConfirmDelete:
+			return m.confirmDeleteSkill()
 		}
 	}
 	return m, nil
@@ -364,7 +374,36 @@ func (m *Model) moveCursor(delta int) {
 		}
 	case screenMCPTarget:
 		m.targetCursor = clamp(m.targetCursor+delta, 0, len(mcpclient.Targets())-1)
+	case screenSkills:
+		if n := len(m.skillRows()); n > 0 {
+			m.skillsCursor = clamp(m.skillsCursor+delta, 0, n-1)
+		}
 	}
+}
+
+// skillRow is one selectable line on the Skills screen: a category header
+// or a skill inside one.
+type skillRow struct {
+	Label      string
+	Path       string
+	IsCategory bool
+	Empty      bool // meaningful for category rows only
+}
+
+func (m *Model) skillRows() []skillRow {
+	var rows []skillRow
+	for _, cat := range m.skillsCats {
+		rows = append(rows, skillRow{
+			Label:      cat.Name,
+			Path:       skills.CategoryPath(m.skillsRoot, cat.Name),
+			IsCategory: true,
+			Empty:      len(cat.Skills) == 0,
+		})
+		for _, sk := range cat.Skills {
+			rows = append(rows, skillRow{Label: sk.Name, Path: sk.Path})
+		}
+	}
+	return rows
 }
 
 func clamp(v, lo, hi int) int {
@@ -395,6 +434,8 @@ func (m *Model) back() (tea.Model, tea.Cmd) {
 		m.screen = screenMCP
 	case screenMCPForm:
 		m.screen = screenMCP
+	case screenSkillsConfirmDelete:
+		m.screen = screenSkills
 	case screenSkillsNewCategory, screenSkillsNewName, screenSkillsNewFolder:
 		m.screen = screenSkills
 	default:
@@ -482,6 +523,21 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		if !m.installing && m.installErr != nil {
 			m.screen = screenMCP
 		}
+	case screenSkills:
+		rows := m.skillRows()
+		if m.skillsCursor >= len(rows) {
+			return m, nil
+		}
+		row := rows[m.skillsCursor]
+		if row.IsCategory && !row.Empty {
+			m.err = fmt.Errorf("%s tiene skills adentro - borralas primero (una carpeta solo se borra vacia)", row.Label)
+			return m, nil
+		}
+		m.err = nil
+		m.skillsDeleteTarget = row.Path
+		m.skillsDeleteLabel = row.Label
+		m.skillsDeleteIsCategory = row.IsCategory
+		m.screen = screenSkillsConfirmDelete
 	case screenDoctor:
 		m.screen = screenMenu
 	}
@@ -503,6 +559,32 @@ func (m *Model) confirmRemove() (tea.Model, tea.Cmd) {
 	m.err = removeErr
 	m.toast = toast
 	return m, nil
+}
+
+// confirmDeleteSkill deletes the selected skill or (empty) category folder,
+// refreshes the list instantly, and - if git-backed - publishes the removal
+// in the background exactly like creating one does.
+func (m *Model) confirmDeleteSkill() (tea.Model, tea.Cmd) {
+	target, label, isCategory := m.skillsDeleteTarget, m.skillsDeleteLabel, m.skillsDeleteIsCategory
+
+	if err := skills.Delete(target); err != nil {
+		m.err = err
+		m.screen = screenSkills
+		return m, nil
+	}
+	m.skillsCats, _ = skills.List(m.skillsRoot)
+	if n := len(m.skillRows()); m.skillsCursor >= n {
+		m.skillsCursor = clamp(n-1, 0, n)
+	}
+	m.screen = screenSkills
+	m.err = nil
+	m.toast = "Se borro " + label
+
+	what := label
+	if !isCategory {
+		what = filepath.Base(filepath.Dir(target)) + "/" + label
+	}
+	return m, m.publishSkillsChange(target, "skills: remove "+what, what)
 }
 
 // applyHTTPEntry installs an OAuth/HTTP catalog entry (no target choice, no
@@ -547,6 +629,7 @@ func (m *Model) openSkillsScreen() tea.Cmd {
 	m.skillsGitBacked = remote != ""
 	m.skillsCats, _ = skills.List(m.skillsRoot)
 	m.screen = screenSkills
+	m.skillsCursor = 0
 	if !m.skillsGitBacked {
 		return nil
 	}
@@ -804,6 +887,8 @@ func (m *Model) View() string {
 		body = m.viewForm(contentWidth)
 	case screenSkills:
 		body = m.viewSkills(contentWidth)
+	case screenSkillsConfirmDelete:
+		body = m.viewSkillsConfirmDelete(contentWidth)
 	case screenSkillsRemotePrompt:
 		body = m.viewSkillsRemotePrompt(contentWidth)
 	case screenSkillsNewCategory:
@@ -1087,8 +1172,18 @@ func (m *Model) viewSkills(w int) string {
 	if len(m.skillsCats) == 0 {
 		b.WriteString(styles.ItemDesc.Render("Todavia no hay skills locales. n = nueva skill, f = nueva carpeta.") + "\n")
 	}
+
+	row := 0
 	for _, cat := range m.skillsCats {
-		b.WriteString(styles.ItemNameSelected.Render(cat.Name) + "\n")
+		catSelected := row == m.skillsCursor
+		catStyle := styles.ItemNameSelected
+		catMarker := "  "
+		if catSelected {
+			catMarker = "→ "
+		}
+		b.WriteString(catMarker + catStyle.Render(cat.Name) + "\n")
+		row++
+
 		if len(cat.Skills) == 0 {
 			b.WriteString("  " + styles.Dim.Render("└── (vacia)") + "\n")
 		}
@@ -1097,10 +1192,29 @@ func (m *Model) viewSkills(w int) string {
 			if i == len(cat.Skills)-1 {
 				branch = "└──"
 			}
-			b.WriteString("  " + styles.Dim.Render(branch) + " " + sk.Name + "\n")
+			marker := "  "
+			nameStyle := styles.ItemDesc
+			if row == m.skillsCursor {
+				marker = "→ "
+				nameStyle = styles.ItemNameSelected
+			}
+			b.WriteString(marker + styles.Dim.Render(branch) + " " + nameStyle.Render(sk.Name) + "\n")
+			row++
 		}
 	}
-	b.WriteString(m.footer("n nueva skill • f nueva carpeta • esc volver"))
+	b.WriteString(m.footer("↑/↓ mover • enter borrar • n nueva skill • f nueva carpeta • esc volver"))
+	return b.String()
+}
+
+func (m *Model) viewSkillsConfirmDelete(w int) string {
+	var b strings.Builder
+	b.WriteString(header("Confirmar"))
+	what := "la skill"
+	if m.skillsDeleteIsCategory {
+		what = "la carpeta"
+	}
+	b.WriteString(fmt.Sprintf("Borrar %s %s. No se puede deshacer.\n\n", what, styles.ItemNameSelected.Render(m.skillsDeleteLabel)))
+	b.WriteString(m.footer("y confirmar • esc cancelar"))
 	return b.String()
 }
 

@@ -76,6 +76,52 @@ func TestNewCategoryShowsUpEvenEmpty(t *testing.T) {
 	}
 }
 
+func TestDelete(t *testing.T) {
+	root := t.TempDir()
+
+	path, err := New(root, "backend", "go services")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := Delete(path); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be gone after Delete, stat err = %v", path, err)
+	}
+
+	// Deleting a skill leaves its (now empty) parent category folder alone -
+	// same as one created empty via NewCategory, still listed.
+	cats, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(cats) != 1 || cats[0].Name != "backend" || len(cats[0].Skills) != 0 {
+		t.Fatalf("expected an empty 'backend' category to remain, got: %+v", cats)
+	}
+
+	catPath := CategoryPath(root, "backend")
+	if err := Delete(catPath); err != nil {
+		t.Fatalf("Delete category: %v", err)
+	}
+
+	newCatPath, err := NewCategory(root, "types")
+	if err != nil {
+		t.Fatalf("NewCategory: %v", err)
+	}
+	if err := Delete(newCatPath); err != nil {
+		t.Fatalf("Delete category: %v", err)
+	}
+
+	cats, err = List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(cats) != 0 {
+		t.Errorf("expected no categories left after deleting both, got: %+v", cats)
+	}
+}
+
 func TestSlug(t *testing.T) {
 	cases := map[string]string{
 		"React Patterns": "react-patterns",

@@ -2,3 +2,4 @@ dist/
 aiworker
 aiworker.exe
 *.bak
+*~

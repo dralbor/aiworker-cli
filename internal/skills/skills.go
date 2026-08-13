@@ -21,6 +21,23 @@ func Root() (string, error) {
 	return filepath.Join(home, ".claude", "skills"), nil
 }
 
+// CategoryPath returns root/category (not slugged again - callers already
+// have the on-disk category name from List).
+func CategoryPath(root, category string) string {
+	return filepath.Join(root, category)
+}
+
+// Delete removes a skill or category folder (and everything in it).
+func Delete(path string) error {
+	if path == "" {
+		return fmt.Errorf("ruta vacia")
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("borrando %s: %w", path, err)
+	}
+	return nil
+}
+
 // Category groups skills found under one category folder.
 type Category struct {
 	Name   string
